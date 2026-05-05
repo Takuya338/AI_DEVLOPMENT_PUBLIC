@@ -1,0 +1,42 @@
+services:
+  web:
+    build:
+      context: .
+    container_name: flask2-web
+    environment:
+      FLASK_APP: app.py
+      FLASK_ENV: development
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app
+    command: python app.py
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - from urllib.request import urlopen; urlopen('http://127.0.0.1:5000/health').read()
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  test:
+    build:
+      context: .
+    profiles:
+      - test
+    environment:
+      BASE_URL: http://web:5000
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+    depends_on:
+      web:
+        condition: service_healthy
+    command: pytest
+
