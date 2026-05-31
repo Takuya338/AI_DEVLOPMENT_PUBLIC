@@ -1,0 +1,22 @@
+name: 継続的インテグレーション
+
+on:
+  pull_request:
+    types:
+      - opened
+
+jobs:
+  test:
+    name: Docker Composeでテスト実行
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: テストコンテナでpytest実行
+        run: docker compose --profile test run --rm test
+
+      - name: コンテナをクリーンアップ
+        if: always()
+        run: docker compose down --remove-orphans
