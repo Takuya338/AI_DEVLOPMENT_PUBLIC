@@ -5,6 +5,10 @@ on:
     types:
       - opened
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     name: Docker Composeでテスト実行
@@ -15,8 +19,79 @@ jobs:
         uses: actions/checkout@v4
 
       - name: テストコンテナでpytest実行
-        run: docker compose --profile test run --rm test
+        id: pytest_run
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose --profile test run --rm test pytest --junitxml=pytest-report.xml 2>&1 | tee pytest-output.txt
+
+      - name: pytest結果をPRコメント用に整形
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.pytest_run.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          outcome = os.getenv("TEST_OUTCOME", "unknown")
+          tests = failures = errors = skipped = 0
+
+          report_file = Path("pytest-report.xml")
+          if report_file.exists():
+              root = ET.parse(report_file).getroot()
+              suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+              for suite in suites:
+                  tests += int(suite.attrib.get("tests", 0))
+                  failures += int(suite.attrib.get("failures", 0))
+                  errors += int(suite.attrib.get("errors", 0))
+                  skipped += int(suite.attrib.get("skipped", 0))
+
+          passed = max(tests - failures - errors - skipped, 0)
+          status = "SUCCESS" if outcome == "success" else "FAILED"
+
+          log_file = Path("pytest-output.txt")
+          log_tail = ""
+          if log_file.exists():
+              lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+              log_tail = "\n".join(lines[-20:])
+
+          body = [
+              "## CI Test Result",
+              f"- Status: {status}",
+              f"- Total: {tests}",
+              f"- Passed: {passed}",
+              f"- Failed: {failures}",
+              f"- Errors: {errors}",
+              f"- Skipped: {skipped}",
+              "",
+              "<details>",
+              "<summary>pytest log (last 20 lines)</summary>",
+              "",
+              "```text",
+              log_tail if log_tail else "No pytest log found.",
+              "```",
+              "</details>",
+          ]
+
+          Path("pr-comment.md").write_text("\n".join(body), encoding="utf-8")
+          PY
+
+      - name: PRへテスト結果コメント
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: ci-test-result
+          recreate: true
+          path: pr-comment.md
 
       - name: コンテナをクリーンアップ
         if: always()
         run: docker compose down --remove-orphans
+
+      - name: テスト失敗時にジョブを失敗させる
+        if: always() && steps.pytest_run.outcome == 'failure'
+        run: exit 1
